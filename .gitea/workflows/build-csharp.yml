@@ -56,6 +56,6 @@ jobs:
           echo "${{ secrets.REGISTRY_PUSH_TOKEN }}" | docker login "${{ inputs.registry }}" -u reeds --password-stdin
           SHA8=$(echo "$GITHUB_SHA" | cut -c1-8)
           IMG="${{ inputs.registry }}/${{ inputs.image }}"
-          docker build -f "${{ inputs.dockerfile }}" -t "${IMG}:latest" -t "${IMG}:${SHA8}" .
+          docker build --network=host -f "${{ inputs.dockerfile }}" -t "${IMG}:latest" -t "${IMG}:${SHA8}" .
           docker push "${IMG}:latest"
           docker push "${IMG}:${SHA8}"
