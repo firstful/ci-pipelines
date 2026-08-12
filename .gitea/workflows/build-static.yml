@@ -1,0 +1,79 @@
+name: build-static
+
+# Reusable pipeline: build + push a static site image (multi-stage Dockerfile:
+# node build stage -> nginx-unprivileged runtime) to the Gitea registry.
+# Call from an app repo:
+#   jobs:
+#     build:
+#       uses: reeds/ci-pipelines/.gitea/workflows/build-static.yml@main
+#       with:
+#         image: reeds/research        # required: registry path (no host)
+#         # dockerfile: Dockerfile     # optional: custom Dockerfile path
+#         # registry: 192.168.1.2:3000 # optional: registry host:port
+#       secrets: inherit               # needs REGISTRY_PUSH_TOKEN
+#
+# Tags pushed: :latest + :<sha8>. Bump the manifest tag (sha8) in
+# sutliff-cluster to deploy — same-tag re-push does NOT re-pull.
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: Registry image path, e.g. reeds/research (no host prefix)
+        required: true
+        type: string
+      dockerfile:
+        description: Dockerfile path relative to repo root
+        required: false
+        type: string
+        default: Dockerfile
+      registry:
+        description: Container registry host[:port]
+        required: false
+        type: string
+        default: 192.168.1.2:3000
+    secrets:
+      REGISTRY_PUSH_TOKEN:
+        required: true
+
+jobs:
+  build:
+    runs-on: [self-hosted]
+    container:
+      image: node:22-bookworm
+      # NOTE: container.options REPLACES the runner's default options
+      # (gradle-cache + build-cache mounts, see runner-config configmap) —
+      # re-mount them here or jobs silently lose the caches. The DinD
+      # socket lives in the runner pod's shared emptyDir (/var/run).
+      options: >-
+        -v /var/run/docker.sock:/var/run/docker.sock
+        -v gradle-cache:/root/.gradle
+        -v build-cache:/cache
+      # Shared LAN dep caches (build-cache volume in the DinD daemon,
+      # persisted on docker-vol): warm once with WAN, builds then restore
+      # offline. Pipelines currently only run `docker build` (deps resolve
+      # inside the Dockerfile) — these paths serve in-job package steps
+      # (go mod download / dotnet restore / npm ci / pip install) and the
+      # BuildKit cache export follow-up.
+      env:
+        GOMODCACHE: /cache/go/pkg/mod
+        GOCACHE: /cache/go-build
+        NUGET_PACKAGES: /cache/nuget
+        PIP_CACHE_DIR: /cache/pip
+        npm_config_cache: /cache/npm
+        CARGO_HOME: /cache/cargo
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and push image
+        run: |
+          set -e
+          apt-get update -qq
+          apt-get install -y -qq docker.io >/dev/null
+          echo "${{ secrets.REGISTRY_PUSH_TOKEN }}" | docker login "${{ inputs.registry }}" -u reeds --password-stdin
+          SHA8=$(echo "$GITHUB_SHA" | cut -c1-8)
+          IMG="${{ inputs.registry }}/${{ inputs.image }}"
+          docker build -f "${{ inputs.dockerfile }}" -t "${IMG}:latest" -t "${IMG}:${SHA8}" .
+          docker push "${IMG}:latest"
+          docker push "${IMG}:${SHA8}"
