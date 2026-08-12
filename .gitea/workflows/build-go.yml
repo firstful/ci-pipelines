@@ -41,9 +41,26 @@ jobs:
     container:
       image: node:22-bookworm
       # NOTE: container.options REPLACES the runner's default options
-      # (gradle-cache mount); the DinD socket lives in the runner pod's
-      # shared emptyDir (/var/run) and must be re-mounted here.
-      options: -v /var/run/docker.sock:/var/run/docker.sock
+      # (gradle-cache + build-cache mounts, see runner-config configmap) —
+      # re-mount them here or jobs silently lose the caches. The DinD
+      # socket lives in the runner pod's shared emptyDir (/var/run).
+      options: >-
+        -v /var/run/docker.sock:/var/run/docker.sock
+        -v gradle-cache:/root/.gradle
+        -v build-cache:/cache
+      # Shared LAN dep caches (build-cache volume in the DinD daemon,
+      # persisted on docker-vol): warm once with WAN, builds then restore
+      # offline. Pipelines currently only run `docker build` (deps resolve
+      # inside the Dockerfile) — these paths serve in-job package steps
+      # (go mod download / dotnet restore / npm ci / pip install) and the
+      # BuildKit cache export follow-up.
+      env:
+        GOMODCACHE: /cache/go/pkg/mod
+        GOCACHE: /cache/go-build
+        NUGET_PACKAGES: /cache/nuget
+        PIP_CACHE_DIR: /cache/pip
+        npm_config_cache: /cache/npm
+        CARGO_HOME: /cache/cargo
     steps:
       - name: Checkout
         uses: actions/checkout@v4
